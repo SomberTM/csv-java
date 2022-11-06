@@ -22,6 +22,30 @@ public class Table<T extends Table.Row> {
                 (primitive.getName().equals("java.lang.String") && wrapper.getName().equals("java.lang.String"));
     }
 
+    private static Class<?> WrapperToPrimitive(Class<?> wrapper) {
+        if (wrapper.getName().equals("java.lang.Integer")) {
+            return int.class;
+        } else if (wrapper.getName().equals("java.lang.Float")) {
+            return float.class;
+        } else if (wrapper.getName().equals("java.lang.Double")) {
+            return double.class;
+        } else if (wrapper.getName().equals("java.lang.Boolean")) {
+            return boolean.class;
+        } else if (wrapper.getName().equals("java.lang.Character")) {
+            return char.class;
+        } else if (wrapper.getName().equals("java.lang.Byte")) {
+            return byte.class;
+        } else if (wrapper.getName().equals("java.lang.Short")) {
+            return short.class;
+        } else if (wrapper.getName().equals("java.lang.Long")) {
+            return long.class;
+        } else if (wrapper.getName().equals("java.lang.String")) {
+            return String.class;
+        } else {
+            return null;
+        }
+    }
+
     private static Class<?> ParseTypeFromString(String str) {
         try {
             Integer.parseInt(str);
@@ -337,7 +361,7 @@ public class Table<T extends Table.Row> {
             Class<?>[] types = new Class<?>[values.length];
             Object[] args = new Object[values.length];
             for (int i = 0; i < values.length; i++) {
-                types[i] = ParseTypeFromString(values[i].toString());
+                types[i] = WrapperToPrimitive(ParseTypeFromString(values[i].toString()));
                 args[i] = values[i];
             }
             return this.rowclass.getDeclaredConstructor(types).newInstance(args);
