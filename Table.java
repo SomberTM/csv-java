@@ -1,3 +1,5 @@
+package CSV;
+
 import java.io.File;
 import java.io.PrintWriter;
 import java.lang.annotation.ElementType;
@@ -7,6 +9,7 @@ import java.lang.annotation.Target;
 import java.lang.reflect.Field;
 import java.util.*;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 public class Table<T extends Table.Row> {
 
@@ -23,27 +26,18 @@ public class Table<T extends Table.Row> {
     }
 
     private static Class<?> WrapperToPrimitive(Class<?> wrapper) {
-        if (wrapper.getName().equals("java.lang.Integer")) {
-            return int.class;
-        } else if (wrapper.getName().equals("java.lang.Float")) {
-            return float.class;
-        } else if (wrapper.getName().equals("java.lang.Double")) {
-            return double.class;
-        } else if (wrapper.getName().equals("java.lang.Boolean")) {
-            return boolean.class;
-        } else if (wrapper.getName().equals("java.lang.Character")) {
-            return char.class;
-        } else if (wrapper.getName().equals("java.lang.Byte")) {
-            return byte.class;
-        } else if (wrapper.getName().equals("java.lang.Short")) {
-            return short.class;
-        } else if (wrapper.getName().equals("java.lang.Long")) {
-            return long.class;
-        } else if (wrapper.getName().equals("java.lang.String")) {
-            return String.class;
-        } else {
-            return null;
-        }
+        return switch (wrapper.getName()) {
+            case "java.lang.Integer" -> int.class;
+            case "java.lang.Float" -> float.class;
+            case "java.lang.Double" -> double.class;
+            case "java.lang.Boolean" -> boolean.class;
+            case "java.lang.Character" -> char.class;
+            case "java.lang.Byte" -> byte.class;
+            case "java.lang.Short" -> short.class;
+            case "java.lang.Long" -> long.class;
+            case "java.lang.String" -> String.class;
+            default -> null;
+        };
     }
 
     private static Class<?> ParseTypeFromString(String str) {
@@ -86,6 +80,12 @@ public class Table<T extends Table.Row> {
     @Target(ElementType.FIELD)
     public @interface Column {}
 
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.FIELD)
+    public @interface Enum {
+        Class<?> enumClass();
+    }
+
     private interface Mapper<T> {
         T map(Object t);
     }
@@ -119,37 +119,55 @@ public class Table<T extends Table.Row> {
                 }
             }
         }
+
     }
 
-    private HashMap<String, Field> columns = new HashMap<>();
+    private final HashMap<String, Field> columns = new HashMap<>();
+    private final HashMap<String, Class<?>> enumResolvers = new HashMap<>();
 
-    private ArrayList<String> columnNames = new ArrayList<>();
-    private ArrayList<T> rows = new ArrayList<>();
+    private final ArrayList<String> columnNames = new ArrayList<>();
+    private final ArrayList<T> rows = new ArrayList<>();
 
-    private Class<T> rowclass;
+    private final Class<T> rowclass;
 
     private final int numColumns;
     private int numRows = 0;
 
-    private String filename;
+    private String filePath;
+
+    private boolean allowDuplicates;
 
     public Table(Class<T> rowclass) {
         this.rowclass = rowclass;
-        this.numColumns = this.loadColumnFields();
+        this.numColumns = this.doReflectionTasks();
     }
 
-    public Table(Class<T> rowclass, String filename) {
+    public Table(Class<T> rowclass, String filePath) {
         this(rowclass);
-        this.filename = filename;
+        this.filePath = filePath;
     }
 
-    public void loadCSV(String filename) {
-        if (this.filename == null) {
-            this.filename = filename;
+    public Table(Class<T> rowclass, String filePath, boolean allowDuplicates) {
+        this(rowclass, filePath);
+        this.allowDuplicates = allowDuplicates;
+    }
+
+    public void loadCSV(String filePath) {
+        if (this.filePath == null) {
+            this.filePath = filePath;
+        }
+
+        File file = new File(filePath);
+        if (!file.exists()) {
+            try {
+                file.createNewFile();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
 
         int lineNumber = 1;
-        try (Scanner scanner = new Scanner(new File(filename))) {
+        try (Scanner scanner = new Scanner(file)) {
             while (scanner.hasNextLine()) {
                 String[] parts = scanner.nextLine().split(",");
                 // Get rid of any leading or trailing whitespace and make everything lowercase
@@ -179,7 +197,7 @@ public class Table<T extends Table.Row> {
                                     String.format("Column %s exists on '%s' but was not found in %s",
                                             this.columns.get(str).getName(),
                                             this.rowclass.getName(),
-                                            filename
+                                            filePath
                                     )
                             );
                         }
@@ -196,9 +214,34 @@ public class Table<T extends Table.Row> {
                     }
 
                     for (int i = 0; i < this.columnNames.size(); i++) {
-                        Field field = this.columns.get(this.columnNames.get(i));
+                        String columnName = this.columnNames.get(i);
+                        Field field = this.columns.get(columnName);
                         Class<?> type = field.getType();
                         Class<?> parsedType = ParseTypeFromString(parts[i]);
+                        if (this.enumResolvers.containsKey(columnName)) {
+                            if (parsedType != Integer.class) {
+                                throw new Exceptions.Parse(
+                                        String.format("Line %d, column %s: Expected enum ordinal, got %s",
+                                                lineNumber,
+                                                columnName,
+                                                parsedType.getName()
+                                        )
+                                );
+                            }
+                            Class<?> enumClass = this.enumResolvers.get(columnName);
+                            ArrayList<java.lang.Enum<?>> enumConstants = new ArrayList<>(Arrays.asList((java.lang.Enum<?>[]) enumClass.getEnumConstants()));
+                            List<Integer> ordinals = enumConstants.stream().map(java.lang.Enum::ordinal).collect(Collectors.toList());
+                            if (!ordinals.contains(Integer.parseInt(parts[i]))) {
+                                throw new Exceptions.Parse(
+                                        String.format("Line %d, column %s: %s is not a valid enum value for %s",
+                                                lineNumber,
+                                                columnName,
+                                                parts[i],
+                                                enumClass.getName()
+                                        )
+                                );
+                            }
+                        } else
                         // Make sure that the type of the value in the CSV file matches the correct column type declared in our row class
                         if (!PrimitiveIsWrapper(type, parsedType)) {
                             String[] wrapperParts = parsedType.getName().split("\\.");
@@ -228,17 +271,30 @@ public class Table<T extends Table.Row> {
 
                 lineNumber++;
             }
+
+            if (!this.allowDuplicates) {
+                this.removeDuplicates();
+            }
+
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
     public void loadCSV() {
-        this.loadCSV(this.filename);
+        this.loadCSV(this.filePath);
     }
 
-    public void saveCSV(String filename) {
-        try (PrintWriter writer = new PrintWriter(filename)) {
+    public void saveCSV(String filePath) {
+        File file = new File(filePath);
+        if (!file.exists()) {
+            try {
+                file.createNewFile();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        try (PrintWriter writer = new PrintWriter(file)) {
             writer.write(this.toString());
         } catch (Exception e) {
             e.printStackTrace();
@@ -246,15 +302,50 @@ public class Table<T extends Table.Row> {
     }
 
     public void saveCSV() {
-        this.saveCSV(this.filename);
+        this.saveCSV(this.filePath);
+    }
+
+    /**
+     * Removes all duplicates from the table that are currently present in this.rows
+     * @implNote This method requires that the Row class implements the Row.Equals interface or at least overrides the equals method from java.lang.Object
+     */
+    public void removeDuplicates() {
+        for (int i = 0; i < this.rows.size(); i++) {
+            for (int j = i + 1; j < this.rows.size(); j++) {
+                if (this.rows.get(i).equals(this.rows.get(j))) {
+                    this.rows.remove(j);
+                    j--;
+                }
+            }
+        }
+    }
+
+    @FunctionalInterface
+    public interface Caster<T> {
+        T cast(Object o);
     }
 
     // Gets all the values in a column
+    // Returns a list with wildcard type so the type can be inferred
+    // Sadly, even with reflection, we can't get the type of the column to be accessible as the return type as much as I'd like to
     public ArrayList<?> getColumn(String column) {
         ArrayList<Object> list = new ArrayList<>();
         for (T row : this.rows) {
             try {
                 list.add(this.columns.get(column).get(row));
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        return list;
+    }
+
+    // Returns a typed listen given a column name and casting function
+    public <C> ArrayList<C> getColumn(String column, Caster<C> caster) {
+        ArrayList<C> list = new ArrayList<>();
+        for (T row : this.rows) {
+            try {
+                list.add(caster.cast(this.columns.get(column).get(row)));
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -294,6 +385,27 @@ public class Table<T extends Table.Row> {
         this.rows.sort(sorter::sort);
     }
 
+    public boolean contains(T row) {
+        for (T t : this.rows) {
+            if (t.equals(row)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean delete(T row) {
+        return this.rows.remove(row);
+    }
+
+    public boolean findDelete(RowFilter<T> filter) {
+        T row = this.find(filter);
+        if (row != null) {
+            return this.delete(row);
+        }
+        return false;
+    }
+
     public int getNumColumns() {
         return this.numColumns;
     }
@@ -320,8 +432,11 @@ public class Table<T extends Table.Row> {
             for (String str : this.columnNames) {
                 try {
                     Field field = this.columns.get(str);
-                    field.setAccessible(true);
                     Object value = field.get(row);
+                    if (this.enumResolvers.containsKey(str)) {
+                        value = ((java.lang.Enum<?>) value).ordinal();
+                    }
+
                     out.append(value.toString());
                     if (!Objects.equals(str, this.columnNames.get(this.columnNames.size() - 1))) {
                         out.append(",");
@@ -335,9 +450,18 @@ public class Table<T extends Table.Row> {
         return out.toString();
     }
 
-    public boolean addRow(Object...values) {
+    @SafeVarargs
+    public final <V> boolean addRow(V... values) {
         T row = this.createRow(values);
+        return this.addRow(row);
+    }
+
+    public boolean addRow(T row) {
         if (row != null) {
+            if (!this.allowDuplicates && this.contains(row)) {
+                System.out.printf("Row '%s' already exists in table\n", row);
+                return false;
+            }
             this.rows.add(row);
             this.numRows++;
             return true;
@@ -346,14 +470,13 @@ public class Table<T extends Table.Row> {
         }
     }
 
-    public boolean addRow(T row) {
-        if (row != null) {
-            this.rows.add(row);
-            this.numRows++;
-            return true;
-        } else {
-            return false;
+    public boolean addAllRows(T...rows) {
+        for (T row : rows) {
+            if (!this.addRow(row)) {
+                return false;
+            }
         }
+        return true;
     }
 
     public T createRow(Object[] values) {
@@ -361,8 +484,13 @@ public class Table<T extends Table.Row> {
             Class<?>[] types = new Class<?>[values.length];
             Object[] args = new Object[values.length];
             for (int i = 0; i < values.length; i++) {
-                types[i] = WrapperToPrimitive(ParseTypeFromString(values[i].toString()));
-                args[i] = values[i];
+                if (this.enumResolvers.containsKey(this.columnNames.get(i))) {
+                    types[i] = this.enumResolvers.get(this.columnNames.get(i));
+                    args[i] = this.enumResolvers.get(this.columnNames.get(i)).getEnumConstants()[Integer.parseInt(values[i].toString())];
+                } else {
+                    types[i] = WrapperToPrimitive(ParseTypeFromString(values[i].toString()));
+                    args[i] = values[i];
+                }
             }
             return this.rowclass.getDeclaredConstructor(types).newInstance(args);
         } catch (Exception e1) {
@@ -370,7 +498,11 @@ public class Table<T extends Table.Row> {
                 T row = this.rowclass.getDeclaredConstructor().newInstance();
                 for (int i = 0; i < values.length; i++) {
                     Field field = this.columns.get(this.columnNames.get(i));
-                    field.set(row, ParseValueFromString(values[i].toString()));
+                    if (this.enumResolvers.containsKey(this.columnNames.get(i))) {
+                        field.set(row, this.enumResolvers.get(this.columnNames.get(i)).getEnumConstants()[Integer.parseInt(values[i].toString())]);
+                    } else {
+                        field.set(row, ParseValueFromString(values[i].toString()));
+                    }
                 }
                 return row;
             } catch (Exception e2) {
@@ -381,15 +513,19 @@ public class Table<T extends Table.Row> {
         return null;
     }
 
-    private int loadColumnFields() {
+    private int doReflectionTasks() {
         Field[] fields = this.rowclass.getDeclaredFields();
         int columnCount = 0;
         for (Field field : fields) {
+            String fname = field.getName().toLowerCase();
             if (field.isAnnotationPresent(Column.class)) {
-                String fname = field.getName().toLowerCase();
+                field.setAccessible(true);
                 columns.put(fname, field);
                 this.columnNames.add(fname);
                 columnCount++;
+            }
+            if (field.isAnnotationPresent(Enum.class)) {
+                this.enumResolvers.put(fname, field.getAnnotation(Enum.class).enumClass());
             }
         }
         return columnCount;
