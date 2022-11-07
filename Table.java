@@ -392,8 +392,25 @@ public class Table<T extends Table.Row> {
         return false;
     }
 
+    public boolean contains(RowFilter<T> filter) {
+        for (T t : this.rows) {
+            if (filter.filter(t)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean delete(T row) {
         return this.rows.remove(row);
+    }
+    public boolean delete(RowFilter<T> filter) {
+        for (T t : this.rows) {
+            if (filter.filter(t)) {
+                return this.rows.remove(t);
+            }
+        }
+        return false;
     }
 
     public boolean findDelete(RowFilter<T> filter) {
