@@ -1,5 +1,3 @@
-package CSV;
-
 import java.io.File;
 import java.io.PrintWriter;
 import java.lang.annotation.ElementType;
